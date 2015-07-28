@@ -91,52 +91,16 @@ void write_buffer(cl_env *env, cl_mem mem, void *ptr, size_t size)
   cl_int err =  clEnqueueWriteBuffer( env->queues[0], mem, CL_TRUE, 0, size, ptr, 0, NULL, NULL );
   CHECK(err);
 }
-/*
-SEXP dgemm(SEXP env_exp, SEXP a, SEXP b)
+
+cl_env* get_env(SEXP env_exp)
 {
   if (TYPEOF(env_exp) != EXTPTRSXP || !Rf_inherits(env_exp, "cl_env"))
     Rf_error("invalid environment argument");
-  cl_env *env = (cl_env *)R_ExternalPtrAddr(env_exp);
-  
-  int ac = ncols(a), ar = nrows(a);
-  int bc = ncols(b), br = nrows(b);
-  if (ar != bc)
-    return R_NilValue;
-  a = PROTECT(coerceVector(a, REALSXP));
-  b = PROTECT(coerceVector(b, REALSXP));
-  SEXP c = PROTECT(allocMatrix(REALSXP, ar, bc));
-  
-  double *ap = REAL(a), *bp = REAL(b);
-  double *cp = REAL(c);
-
-  CHECK(clblasSetup());
-  cl_mem buf_a = create_buffer(env, sizeof(double) * ac * ar);
-  cl_mem buf_b = create_buffer(env, sizeof(double) * bc * br);
-  cl_mem buf_c = create_buffer(env, sizeof(double) * bc * ar);
-  write_buffer(env, buf_a, ap, sizeof(double) * ac * ar);
-  write_buffer(env, buf_b, bp, sizeof(double) * bc * br);
-  cl_int err = clblasDgemm( clblasColumnMajor, clblasNoTrans, clblasNoTrans,
-                            ar, bc, ac,
-                            1, buf_a, 0, ar,
-                            buf_b, 0, br, 0,
-                            buf_c, 0, ar,
-                            env->num_queues, env->queues, 0, NULL, NULL );
-  for (int i = 0; i < env->num_queues; i++)
-    clFinish(env->queues[i]);
-  CHECK(err);
-  read_buffer(env, buf_c, cp, sizeof(double) * ar * bc);
-  clFinish(env->queues[0]);
-  clblasTeardown();
-  
-  UNPROTECT(3);
-  return c;
+  return (cl_env *)R_ExternalPtrAddr(env_exp);
 }
-*/
 
-SEXP base(SEXP env_exp, SEXP op, SEXP args)
+SEXP get_type(SEXP x)
 {
-  if (TYPEOF(env_exp) != EXTPTRSXP || !Rf_inherits(env_exp, "cl_env"))
-    Rf_error("invalid environment argument");
-  cl_env *env = (cl_env *)R_ExternalPtrAddr(env_exp);
-  
+  printf("type is %d\n", TYPEOF(x));
+  return R_NilValue;
 }

@@ -8,7 +8,14 @@
 
 #define CHECK(error) { \
   if (error != CL_SUCCESS) { \
-    Rf_error("Error in clutil.c line :%d, error code :%d\n", __LINE__, error); \
+    Rf_error("Error in RclBLAS/src/%s, line :%d, error code :%d\n", __FILE__, __LINE__, error); \
+  } \
+} \
+
+#define TYPECHECK(exp, type) { \
+  if (TYPEOF(exp) != type) { \
+    Rf_error("Error in RclBLAS/src/%s, line :%d, invalid type %d, expected type is %d\n", \
+            __FILE__, __LINE__, TYPEOF(exp), type); \
   } \
 } \
 
@@ -27,5 +34,6 @@ typedef struct cl_env {
 cl_mem create_buffer(cl_env *env, int size);
 void read_buffer(cl_env *env, cl_mem mem, void *ptr, size_t size);
 void write_buffer(cl_env *env, cl_mem mem, void *ptr, size_t size);
+cl_env* get_env(SEXP env_exp);
 
 #endif
