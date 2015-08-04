@@ -5,7 +5,7 @@ PKG_LIBS = $(LD_FLAGS) $(LIBS) \
            -L/home/jihye/clBLAS/clBLAS-2.4.0-Linux-x64/lib64/ \
            -lOpenCL -lclBLAS
 
-OBJS = blas1-wrapper.o blas2-wrapper.o clutil.o
+OBJS = blas1-wrapper.o blas2-wrapper.o blas3-wrapper.o clutil.o
 
 all: $(SHLIB)
 $(SHLIB): $(OBJS)

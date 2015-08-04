@@ -15,7 +15,17 @@
 #define TYPECHECK(exp, type) { \
   if (TYPEOF(exp) != type) { \
     Rf_error("Error in RclBLAS/src/%s, line :%d, invalid type %d, expected type is %d\n", \
-            __FILE__, __LINE__, TYPEOF(exp), type); \
+             __FILE__, __LINE__, TYPEOF(exp), type); \
+    return R_NilValue; \
+  } \
+} \
+
+#define MATRIXCHECK(exp, type) { \
+  TYPECHECK(exp, type) \
+  if (!isMatrix(exp)) {\
+    Rf_error("Error in RclBLAS/src/%s, line :%d, invalid exp, expected type is matrix\n", \
+             __FILE__, __LINE__); \
+    return R_NilValue; \
   } \
 } \
 
@@ -27,6 +37,7 @@ typedef struct cl_env {
   cl_context *context;
   cl_int num_queues;
   cl_command_queue *queues;
+  cl_uint num_events;
   cl_event *events;
 } cl_env;
 
@@ -35,5 +46,7 @@ cl_mem create_buffer(cl_env *env, int size);
 void read_buffer(cl_env *env, cl_mem mem, void *ptr, size_t size);
 void write_buffer(cl_env *env, cl_mem mem, void *ptr, size_t size);
 cl_env* get_env(SEXP env_exp);
-
+clblasUplo getUplo(SEXP UPLO);
+clblasDiag getDiag(SEXP DIAG);
+clblasSide getSide(SEXP SIDE);
 #endif

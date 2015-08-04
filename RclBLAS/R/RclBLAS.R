@@ -1,5 +1,6 @@
-env <- function(dev_type="g", dev_num=4) .Call("create_env", dev_type, dev_num)
+create_env <- function(dev_type="g", dev_num=4) .Call("create_env", dev_type, dev_num)
 type <- function(x) .Call("get_type", x)
+
 
 dswap <- function(env, x, y) .Call("Dswap", env, x, y)
 dscal <- function(env, alpha, x) .Call("Dscal", env, alpha, x)
@@ -13,3 +14,23 @@ drotm <- function(env, x, y, param) .Call("Drotm", env, x, y, param)
 dnrm2 <- function(env, x) .Call("Dnrm2", env, x)
 idamax <- function(env, x) .Call("iDamax", env, x)
 dasum <- function(env, x) .Call("Dasum", env, x)
+
+dgemv <- function(env, a, x, y, alpha=1, beta=1) .Call("Dgemv", env, a, x, y, alpha, beta)
+dsymv <- function(env, a, x, y, alpha=1, beta=1, uplo='u') .Call("Dsymv", env, a, x, y, alpha, beta, uplo)
+dtrmv <- function(env, a, x, uplo='u', diag='n') .Call("Dtrmv", env, a, x, uplo, diag)
+dtrsv <- function(env, a, x, uplo='u', diag='n') .Call("Dtrsv", env, a, x, uplo, diag)
+dger <- function(env, a, x, y, alpha=1) .Call("Dger", env, a, x, y, alpha)
+dsyr <- function(env, a, x, alpha=1, uplo='u') .Call("Dsyr", env, a, x, alpha, uplo)
+dsyr2 <- function(env, a, x, y, alpha=1, uplo='u') .Call("Dsyr2", env, a, x, y, alpha, uplo)
+dgbmv <- function(env, a, x, y, alpha=1, beta=1) .Call("Dgbmv", env, a, x, y, alpha, beta)
+dtbmv <- function(env, a, x, uplo='u', diag='n') .Call("Dtbmv", env, a, x, uplo, diag)
+dsbmv <- function(env, a, x, y, alpha=1, beta=1, uplo='u') .Call("Dsbmv", env, a, x, y, alpha, beta, uplo)
+dtbsv <- function(env, a, x, uplo='u', diag='n') .Call("Dtbsv", env, a, x, uplo, diag)
+
+dgemm <- function(env, a, b, c=null, alpha=1, beta=1) .Call("Dgemm", env, a, b, c, alpha, beta)
+dtrmm <- function(env, a, b, alpha=1, uplo='u', diag='n', side='l') .Call("Dtrmm", env, a, b, alpha, uplo, diag, side)
+dtrsm <- function(env, a, b, alpha=1, uplo='u', diag='n', side='l') .Call("Dtrsm", env, a, b, alpha, uplo, diag, side)
+dsyrk <- function(env, a, c=null, alpha=1, beta=0, uplo='u') .Call("Dsyrk", env, a, c, alpha, beta, uplo)
+dsyr2k <- function(env, a, b, c=null, alpha=1, beta=0, uplo='u') .Call("Dsyr2k", env, a, b, c, alpha, beta, uplo)
+dsymm <- function(env, a, b, c=null, alpha=1, beta=0, uplo='u', side='l') .Call("Dsymm", env, a, b, c, alpha, beta, uplo, side)
+

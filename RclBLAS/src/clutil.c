@@ -3,10 +3,13 @@
 void env_finalizer(SEXP ref)
 {
   cl_env *env = (cl_env *)R_ExternalPtrAddr(ref);
+  for (int i = 0; i < env->num_queues; i++)
+    clReleaseCommandQueue(env->queues[i]);
+  clReleaseContext(*(env->context));
   if (env->platform != NULL) free(env->platform);
   if (env->devices != NULL) free(env->devices);
   if (env->queues != NULL) free(env->queues);
-  if (env->events != NULL) free(env->events);
+  //if (env->events != NULL) free(env->events);
   free(env);
 }
 
@@ -88,13 +91,13 @@ void read_buffer(cl_env *env, cl_mem mem, void *ptr, size_t size)
 
 void write_buffer(cl_env *env, cl_mem mem, void *ptr, size_t size)
 {
-  cl_int err =  clEnqueueWriteBuffer( env->queues[0], mem, CL_TRUE, 0, size, ptr, 0, NULL, NULL );
+  cl_int err = clEnqueueWriteBuffer( env->queues[0], mem, CL_TRUE, 0, size, ptr, 0, NULL, NULL );
   CHECK(err);
 }
 
 cl_env* get_env(SEXP env_exp)
 {
-  if (TYPEOF(env_exp) != EXTPTRSXP || !Rf_inherits(env_exp, "cl_env"))
+  if (TYPEOF(env_exp) != EXTPTRSXP || !inherits(env_exp, "cl_env"))
     Rf_error("invalid environment argument");
   return (cl_env *)R_ExternalPtrAddr(env_exp);
 }
@@ -103,4 +106,28 @@ SEXP get_type(SEXP x)
 {
   printf("type is %d\n", TYPEOF(x));
   return R_NilValue;
+}
+
+clblasUplo getUplo(SEXP UPLO)
+{
+  char c;
+  if (!IS_SCALAR(UPLO, STRSXP) || ((c = *CHAR(STRING_ELT(UPLO, 0))) != 'u' && c != 'l') )
+    Rf_error("uplo must be character \'u\' or \'l\'\n");
+  return c == 'u' ? clblasUpper : clblasLower;
+}
+
+clblasDiag getDiag(SEXP DIAG)
+{
+  char c;
+  if (!IS_SCALAR(DIAG, STRSXP) || ((c = *CHAR(STRING_ELT(DIAG, 0))) != 'u' && c != 'n') )
+    Rf_error("diag must be character \'u\' or \'n\'\n");
+  return c == 'u' ? clblasUnit : clblasNonUnit;
+}
+
+clblasSide getSide(SEXP SIDE)
+{
+  char c;
+  if (!IS_SCALAR(SIDE, STRSXP) || ((c = *CHAR(STRING_ELT(SIDE, 0))) != 'l' && c != 'r') )
+    Rf_error("side must be character \'l\' or \'r\'\n");
+  return c == 'l' ? clblasLeft : clblasRight;
 }
