@@ -9,7 +9,7 @@ void env_finalizer(SEXP ref)
   if (env->platform != NULL) free(env->platform);
   if (env->devices != NULL) free(env->devices);
   if (env->queues != NULL) free(env->queues);
-  //if (env->events != NULL) free(env->events);
+  if (env->events != NULL) free(env->events);
   free(env);
 }
 
@@ -71,6 +71,9 @@ SEXP create_env(SEXP dev_type, SEXP dev_num)
     env->queues[i] = clCreateCommandQueue(*(env->context), env->devices[i], 0, &err);
     CHECK(err);
   }
+  env->num_events = 0;
+  env->events = (cl_event *)malloc(sizeof(cl_event) * EVENTS_LIMIT);
+  env->turn = 0;
   UNPROTECT(1);
   return ext;
 }
@@ -95,6 +98,30 @@ void write_buffer(cl_env *env, cl_mem mem, void *ptr, size_t size)
   CHECK(err);
 }
 
+cl_mem create_mem(cl_env *env, void *ptr, int size, cl_mem_flags flag, cl_event *event)
+{
+  cl_int err;
+  cl_mem mem = clCreateBuffer( *(env->context), flag, size, NULL, &err);
+  CHECK(err);
+  if (ptr != NULL)
+  {
+    err = clEnqueueWriteBuffer( 
+      env->queues[env->turn], mem, CL_FALSE, 0, size, ptr, 0, NULL, event);
+    //env->turn = (env->turn + 1) % env->num_queues;
+    CHECK(err);
+  }
+  return mem;
+}
+
+cl_event* read_mem(cl_env *env, cl_mem mem, void *ptr, int size, int num_events, cl_event *events)
+{
+  cl_event* event = (cl_event *)malloc(sizeof(cl_event));
+  cl_int err = clEnqueueReadBuffer( 
+    env->queues[env->turn], mem, CL_FALSE, 0, size, ptr, num_events, events, event );
+  CHECK(err);
+  return event;
+}
+
 cl_env* get_env(SEXP env_exp)
 {
   if (TYPEOF(env_exp) != EXTPTRSXP || !inherits(env_exp, "cl_env"))
@@ -106,6 +133,19 @@ SEXP get_type(SEXP x)
 {
   printf("type is %d\n", TYPEOF(x));
   return R_NilValue;
+}
+
+clblasTranspose getTrans(SEXP TRANS)
+{
+  char c;
+  if (!IS_SCALAR(TRANS, STRSXP) || ((c = *CHAR(STRING_ELT(TRANS, 0))) != 'n' && c != 't' && c != 'c'))
+    Rf_error("trans must be character \'n\' or \'t\' \'c\'\n");
+  switch(c)
+  {
+    case 'c': return clblasConjTrans;
+    case 't': return clblasTrans;
+    default: return clblasNoTrans;
+  }
 }
 
 clblasUplo getUplo(SEXP UPLO)
@@ -130,4 +170,16 @@ clblasSide getSide(SEXP SIDE)
   if (!IS_SCALAR(SIDE, STRSXP) || ((c = *CHAR(STRING_ELT(SIDE, 0))) != 'l' && c != 'r') )
     Rf_error("side must be character \'l\' or \'r\'\n");
   return c == 'l' ? clblasLeft : clblasRight;
+}
+
+void push_event(cl_env *env, cl_event *event)
+{
+  env->events[env->num_events] = *event;
+  env->num_events += 1;
+}
+
+void wait_all_events(cl_env *env)
+{
+  CHECK(clWaitForEvents(env->num_events, env->events));
+  env->num_events = 0;
 }

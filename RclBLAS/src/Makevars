@@ -1,9 +1,12 @@
+CLBLAS_INCLUDE = -I/home/jihye/clBLAS/clBLAS-2.4.0-Linux-x64/include/
+CLBLAS_LIB_PATH = -L/home/jihye/clBLAS/clBLAS-2.4.0-Linux-x64/lib64/
+
 PKG_CFLAGS = $(CFLAGS) \
-             -I/home/jihye/clBLAS/clBLAS-2.4.0-Linux-x64/include/
+             $(CLBLAS_INCLUDE) \
 
 PKG_LIBS = $(LD_FLAGS) $(LIBS) \
-           -L/home/jihye/clBLAS/clBLAS-2.4.0-Linux-x64/lib64/ \
-           -lOpenCL -lclBLAS
+           $(CLBLAS_LIB_PATH) \
+           -lOpenCL -lclBLAS 
 
 OBJS = blas1-wrapper.o blas2-wrapper.o blas3-wrapper.o clutil.o
 

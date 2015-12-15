@@ -1,262 +1,344 @@
 #include "clutil.h"
+#include "routines.h"
 
-
-SEXP Dgemm(SEXP env_exp, SEXP A, SEXP B, SEXP C, SEXP ALPHA, SEXP BETA)
+SEXP Dgemm(
+  SEXP ENV, SEXP A, SEXP B, SEXP C, SEXP ALPHA, SEXP BETA, SEXP TRANSA, SEXP TRANSB)
 {
-  cl_env *env = get_env(env_exp);
+  cl_env *env = get_env(ENV);
+  int allocated = 0;
   MATRIXCHECK(A, REALSXP);
   MATRIXCHECK(B, REALSXP);
-  int na = LENGTH(A), ar = nrows(A), ac = ncols(A);
-  int nb = LENGTH(B), br = nrows(B), bc = ncols(B);
-  if (ac != br)
-    error_return("invalid matrix length\n");
-  if (!IS_SCALAR(ALPHA, REALSXP) || !IS_SCALAR(BETA, REALSXP))
-    error_return("alpha and beta must be double type scalar\n");
-  double alpha = REAL(ALPHA)[0], beta = REAL(BETA)[0];
-
-  if (C == R_NilValue)
+  SCALARCHECK(ALPHA, REALSXP);
+  SCALARCHECK(BETA, REALSXP);
+  clblasTranspose transA = getTrans(TRANSA);
+  clblasTranspose transB = getTrans(TRANSB);
+  double alpha = SCALARREAL(ALPHA), beta = SCALARREAL(BETA);
+  int ar = nrows(A), ac = ncols(A), br = nrows(B), bc = ncols(B), cr, cc;
+  if (isNull(C) || LENGTH(C) == 0)
   {
-    C = PROTECT(allocMatrix(REALSXP, ar, bc));
+    cr = transA == clblasNoTrans ? ar : ac;
+    cc = transB == clblasNoTrans ? bc : br;
+    C = PROTECT(allocMatrix(REALSXP, cr, cc));
     beta = 0;
+    allocated = 1;
   } else {
     MATRIXCHECK(C, REALSXP);
-    if (ar != nrows(C) || bc != ncols(C))
-      error_return("invalid matrix length\n");
+    cr = nrows(C), cc = ncols(C);
   }
 
-  CHECK(clblasSetup());
-  cl_mem mem_a = create_buffer(env, sizeof(double) * na);
-  cl_mem mem_b = create_buffer(env, sizeof(double) * nb);
-  cl_mem mem_c = create_buffer(env, sizeof(double) * LENGTH(C));
-  write_buffer(env, mem_a, REAL(A), sizeof(double) * na);
-  write_buffer(env, mem_b, REAL(B), sizeof(double) * nb);
-  if (beta != 0)
-    write_buffer(env, mem_c, REAL(C), sizeof(double) * LENGTH(C));
-  CHECK(clFinish(env->queues[0]));
-  
-  cl_event event = NULL;
-  cl_int err = clblasDgemm(clblasColumnMajor, clblasNoTrans, clblasNoTrans,
-                           ar, bc, br, alpha, mem_a, 0, ar, mem_b, 0, br, beta, mem_c, 0, ar,
-                           env->num_queues, env->queues, 0, NULL, &event);
-  CHECK(clWaitForEvents(1, &event));
+  int size_a = LENGTH(A) * sizeof(double);
+  int size_b = LENGTH(B) * sizeof(double);
+  int size_c = LENGTH(C) * sizeof(double);
+  double *ap = REAL(A), *bp = REAL(B), *cp = REAL(C);
+  cl_int err = Dgemm_internal(
+    env, ap, bp, cp, alpha, beta, transA, transB, ar, ac, br, bc, cr, cc, size_a, size_b, size_c);
+  CHECK(err);
 
-  read_buffer(env, mem_c, REAL(C), sizeof(double) * LENGTH(C));
-  CHECK(clFinish(env->queues[0]));
-  clblasTeardown();
+  UNPROTECT(allocated);
   return C;
 }
 
-SEXP Dtrmm(SEXP env_exp, SEXP A, SEXP B, SEXP ALPHA, SEXP UPLO, SEXP DIAG, SEXP SIDE)
+cl_int Dgemm_internal(
+  cl_env *env, double *a, double *b, double *c, double alpha, double beta,
+  clblasTranspose transA, clblasTranspose transB, 
+  int ar, int ac, int br, int bc, int cr, int cc, int size_a, int size_b, int size_c)
 {
-  cl_env *env = get_env(env_exp);
+  CHECK(clblasSetup());
+  cl_event events[NEVENTS];
+  int nevent = 0;
+  cl_mem mem_a = create_mem(env, a, size_a, CL_MEM_READ_ONLY, &(events[nevent++]));
+  cl_mem mem_b = create_mem(env, b, size_b, CL_MEM_READ_ONLY, &(events[nevent++]));
+  cl_mem mem_c;
+  if (beta != 0) mem_c = create_mem(env, c, size_c, CL_MEM_READ_WRITE, &(events[nevent++]));
+  else mem_c = create_mem(env, NULL, size_c, CL_MEM_READ_WRITE, NULL);
+  
+  cl_int err = clblasDgemm(clblasColumnMajor, transA, transB,
+    ar, bc, ac, alpha, mem_a, 0, ar, mem_b, 0, br, beta, mem_c, 0, cr,
+    1, &(env->queues[0]), nevent, events, &(events[nevent]));
+  CHECK(err);
+  events[nevent+1] = *read_mem(env, mem_c, c, size_c, 1, &(events[nevent]));
+  CHECK(clWaitForEvents(1, &(events[nevent+1])));
+  CHECK(clReleaseMemObject(mem_a));
+  CHECK(clReleaseMemObject(mem_b));
+  CHECK(clReleaseMemObject(mem_c));
+  clblasTeardown();
+  return CL_SUCCESS;
+}
+
+SEXP Dtrmm(SEXP ENV, SEXP A, SEXP B, SEXP ALPHA, SEXP SIDE, SEXP TRANSA, SEXP UPLO, SEXP DIAG)
+{
+  cl_env *env = get_env(ENV);
   MATRIXCHECK(A, REALSXP);
   MATRIXCHECK(B, REALSXP);
+  SCALARCHECK(ALPHA, REALSXP);
+  clblasSide side = getSide(SIDE);
+  clblasTranspose transA = getTrans(TRANSA);
   clblasUplo uplo = getUplo(UPLO);
   clblasDiag diag = getDiag(DIAG);
-  clblasSide side = getSide(SIDE);
-  int na = LENGTH(A), ar = nrows(A), ac = ncols(A);
-  int nb = LENGTH(B), br = nrows(B), bc = ncols(B);
-  if ((side == clblasLeft && ac != br) || (side == clblasRight && bc != ar))
-    error_return("invalid matrix length\n");
-  int lda = side == clblasLeft ? ac : ar;
-  if (!IS_SCALAR(ALPHA, REALSXP))
-    error_return("alpha and beta must be double type scalar\n");
-  double alpha = REAL(ALPHA)[0];
-  
-  CHECK(clblasSetup());
-  cl_mem mem_a = create_buffer(env, sizeof(double) * na);
-  cl_mem mem_b = create_buffer(env, sizeof(double) * nb);
-  write_buffer(env, mem_a, REAL(A), sizeof(double) * na);
-  write_buffer(env, mem_b, REAL(B), sizeof(double) * nb);
-  CHECK(clFinish(env->queues[0]));
-  
-  cl_event event = NULL;
-  cl_int err = clblasDtrmm(clblasColumnMajor, side, uplo, clblasNoTrans, diag,
-                           br, bc, alpha, mem_a, 0, lda, mem_b, 0, br,
-                           env->num_queues, env->queues, 0, NULL, &event);
-  CHECK(clWaitForEvents(1, &event));
+  double alpha = SCALARREAL(ALPHA);
+  int ar = nrows(A), ac = ncols(A), br = nrows(B), bc = ncols(B);
 
-  read_buffer(env, mem_b, REAL(B), sizeof(double) * nb);
-  CHECK(clFinish(env->queues[0]));
-  clblasTeardown();
+  int size_a = LENGTH(A) * sizeof(double);
+  int size_b = LENGTH(B) * sizeof(double);
+  double *ap = REAL(A), *bp = REAL(B);
+  cl_int err = Dtrmm_internal(
+    env, ap, bp, alpha, side, transA, uplo, diag, ar, ac, br, bc, size_a, size_b);
+  CHECK(err);
+
   return B;
 }
 
-SEXP Dtrsm(SEXP env_exp, SEXP A, SEXP B, SEXP ALPHA, SEXP UPLO, SEXP DIAG, SEXP SIDE)
+cl_int Dtrmm_internal(
+  cl_env *env, double *a, double *b, double alpha, clblasSide side, clblasTranspose transA, 
+  clblasUplo uplo, clblasDiag diag, int ar, int ac, int br, int bc, int size_a, int size_b)
 {
-  cl_env *env = get_env(env_exp);
+  CHECK(clblasSetup());
+  cl_event events[NEVENTS];
+  int nevent = 0;
+  cl_mem mem_a = create_mem(env, a, size_a, CL_MEM_READ_ONLY, &(events[nevent++]));
+  cl_mem mem_b = create_mem(env, b, size_b, CL_MEM_READ_WRITE, &(events[nevent++]));
+
+  cl_int err = clblasDtrmm(clblasColumnMajor, side, uplo, transA, diag,
+    br, bc, alpha, mem_a, 0, ar, mem_b, 0, br,
+    1, &(env->queues[0]), nevent, events, &(events[nevent]));
+  CHECK(err);
+  events[nevent+1] = *read_mem(env, mem_b, b, size_b, 1, &(events[nevent]));
+  CHECK(clWaitForEvents(1, &(events[nevent+1])));
+  CHECK(clReleaseMemObject(mem_a));
+  CHECK(clReleaseMemObject(mem_b));
+  clblasTeardown();
+  return CL_SUCCESS;
+}
+
+SEXP Dtrsm(SEXP ENV, SEXP A, SEXP B, SEXP ALPHA, SEXP SIDE, SEXP TRANSA, SEXP UPLO, SEXP DIAG)
+{
+  cl_env *env = get_env(ENV);
   MATRIXCHECK(A, REALSXP);
   MATRIXCHECK(B, REALSXP);
+  SCALARCHECK(ALPHA, REALSXP);
+  clblasSide side = getSide(SIDE);
+  clblasTranspose transA = getTrans(TRANSA);
   clblasUplo uplo = getUplo(UPLO);
   clblasDiag diag = getDiag(DIAG);
-  clblasSide side = getSide(SIDE);
-  int na = LENGTH(A), ar = nrows(A), ac = ncols(A);
-  int nb = LENGTH(B), br = nrows(B), bc = ncols(B);
-  if ((side == clblasLeft && ac != br) || (side == clblasRight && bc != ar))
-    error_return("invalid matrix length\n");
-  int lda = side == clblasLeft ? ac : ar;
-  if (!IS_SCALAR(ALPHA, REALSXP))
-    error_return("alpha and beta must be double type scalar\n");
-  double alpha = REAL(ALPHA)[0];
-  
-  CHECK(clblasSetup());
-  cl_mem mem_a = create_buffer(env, sizeof(double) * na);
-  cl_mem mem_b = create_buffer(env, sizeof(double) * nb);
-  write_buffer(env, mem_a, REAL(A), sizeof(double) * na);
-  write_buffer(env, mem_b, REAL(B), sizeof(double) * nb);
-  CHECK(clFinish(env->queues[0]));
-  
-  cl_event event = NULL;
-  cl_int err = clblasDtrsm(clblasColumnMajor, side, uplo, clblasNoTrans, diag,
-                           br, bc, alpha, mem_a, 0, lda, mem_b, 0, br,
-                           env->num_queues, env->queues, 0, NULL, &event);
-  CHECK(clWaitForEvents(1, &event));
+  double alpha = SCALARREAL(ALPHA);
+  int ar = nrows(A), ac = ncols(A), br = nrows(B), bc = ncols(B);
 
-  read_buffer(env, mem_b, REAL(B), sizeof(double) * nb);
-  CHECK(clFinish(env->queues[0]));
-  clblasTeardown();
+  int size_a = LENGTH(A) * sizeof(double);
+  int size_b = LENGTH(B) * sizeof(double);
+  double *ap = REAL(A), *bp = REAL(B);
+  cl_int err = Dtrsm_internal(
+    env, ap, bp, alpha, side, transA, uplo, diag, ar, ac, br, bc, size_a, size_b);
+  CHECK(err);
+
   return B;
 }
 
-SEXP Dsyrk(SEXP env_exp, SEXP A, SEXP C, SEXP ALPHA, SEXP BETA, SEXP UPLO)
+cl_int Dtrsm_internal(
+  cl_env *env, double *a, double *b, double alpha, clblasSide side, clblasTranspose transA, 
+  clblasUplo uplo, clblasDiag diag, int ar, int ac, int br, int bc, int size_a, int size_b)
 {
-  cl_env *env = get_env(env_exp);
+  CHECK(clblasSetup());
+  cl_event events[NEVENTS];
+  int nevent = 0;
+  cl_mem mem_a = create_mem(env, a, size_a, CL_MEM_READ_ONLY, &(events[nevent++]));
+  cl_mem mem_b = create_mem(env, b, size_b, CL_MEM_READ_WRITE, &(events[nevent++]));
+
+  cl_int err = clblasDtrsm(clblasColumnMajor, side, uplo, transA, diag,
+    br, bc, alpha, mem_a, 0, ar, mem_b, 0, br,
+    1, &(env->queues[0]), nevent, events, &(events[nevent]));
+  CHECK(err);
+  events[nevent+1] = *read_mem(env, mem_b, b, size_b, 1, &(events[nevent]));
+  CHECK(clWaitForEvents(1, &(events[nevent+1])));
+  CHECK(clReleaseMemObject(mem_a));
+  CHECK(clReleaseMemObject(mem_b));
+  clblasTeardown();
+  return CL_SUCCESS;
+}
+
+SEXP Dsyrk(SEXP ENV, SEXP A, SEXP C, SEXP ALPHA, SEXP BETA, SEXP TRANSA, SEXP UPLO)
+{
+  cl_env *env = get_env(ENV);
+  int allocated = 0;
   MATRIXCHECK(A, REALSXP);
+  SCALARCHECK(ALPHA, REALSXP);
+  SCALARCHECK(BETA, REALSXP);
+  clblasTranspose transA = getTrans(TRANSA);
   clblasUplo uplo = getUplo(UPLO);
-  int na = LENGTH(A), ar = nrows(A), ac = ncols(A);
-  if (ar != ac)
-    error_return("invalid matrix length\n");
-  if (!IS_SCALAR(ALPHA, REALSXP) || !IS_SCALAR(BETA, REALSXP))
-    error_return("alpha and beta must be double type scalar\n");
-  double alpha = REAL(ALPHA)[0], beta = REAL(BETA)[0];
-  
-  if (C == R_NilValue)
+  double alpha = SCALARREAL(ALPHA), beta = SCALARREAL(BETA);
+  int ar = nrows(A), ac = ncols(A), n;
+  if (isNull(C) || LENGTH(C) == 0)
   {
-    C = PROTECT(allocMatrix(REALSXP, ar, ac));
+    n = transA == clblasNoTrans ? ar : ac;
+    C = PROTECT(allocMatrix(REALSXP, n, n));
     beta = 0;
+    allocated = 1;
   } else {
     MATRIXCHECK(C, REALSXP);
-    if (ar != nrows(C) || ac != ncols(C))
-      error_return("invalid matrix length\n");
+    n = nrows(C);
   }
-  
-  CHECK(clblasSetup());
-  cl_mem mem_a = create_buffer(env, sizeof(double) * na);
-  cl_mem mem_c = create_buffer(env, sizeof(double) * LENGTH(C));
-  write_buffer(env, mem_a, REAL(A), sizeof(double) * na);
-  if (beta != 0)
-    write_buffer(env, mem_c, REAL(C), sizeof(double) * LENGTH(C));
-  CHECK(clFinish(env->queues[0]));
-  
-  cl_event event = NULL;
-  cl_int err = clblasDsyrk(clblasColumnMajor, uplo, clblasNoTrans, 
-                           ncols(C), ac, alpha, mem_a, 0, ac, beta, mem_c, 0, ncols(C),
-                           env->num_queues, env->queues, 0, NULL, &event);
-  CHECK(clWaitForEvents(1, &event));
 
-  read_buffer(env, mem_c, REAL(C), sizeof(double) * LENGTH(C));
-  CHECK(clFinish(env->queues[0]));
-  clblasTeardown();
+  int size_a = LENGTH(A) * sizeof(double);
+  int size_c = LENGTH(C) * sizeof(double);
+  double *ap = REAL(A), *cp = REAL(C);
+  cl_int err = Dsyrk_internal(
+    env, ap, cp, alpha, beta, transA, uplo, ar, ac, n, size_a, size_c);
+  CHECK(err);
+
+  UNPROTECT(allocated);
   return C;
 }
 
-SEXP Dsyr2k(SEXP env_exp, SEXP A, SEXP B, SEXP C, SEXP ALPHA, SEXP BETA, SEXP UPLO)
+cl_int Dsyrk_internal(
+  cl_env *env, double *a, double *c, double alpha, double beta,
+  clblasTranspose transA, clblasUplo uplo, int ar, int ac, int n, int size_a, int size_c)
 {
-  cl_env *env = get_env(env_exp);
+  CHECK(clblasSetup());
+  cl_event events[NEVENTS];
+  int nevent = 0;
+  cl_mem mem_a = create_mem(env, a, size_a, CL_MEM_READ_ONLY, &(events[nevent++]));
+  cl_mem mem_c;
+  if (beta != 0) mem_c = create_mem(env, c, size_c, CL_MEM_READ_WRITE, &(events[nevent++]));
+  else mem_c = create_mem(env, NULL, size_c, CL_MEM_READ_WRITE, NULL);
+  
+  int k = transA == clblasNoTrans ? ar : ac;
+  cl_int err = clblasDsyrk(clblasColumnMajor, uplo, transA, 
+    n, k, alpha, mem_a, 0, ac, beta, mem_c, 0, n,
+    1, &(env->queues[0]), nevent, events, &(events[nevent]));
+  CHECK(err);
+  events[nevent+1] = *read_mem(env, mem_c, c, size_c, 1, &(events[nevent]));
+  CHECK(clWaitForEvents(1, &(events[nevent+1])));
+  CHECK(clReleaseMemObject(mem_a));
+  CHECK(clReleaseMemObject(mem_c));
+  clblasTeardown();
+  return CL_SUCCESS;
+}
+
+SEXP Dsyr2k(SEXP ENV, SEXP A, SEXP B, SEXP C, SEXP ALPHA, SEXP BETA, SEXP TRANSAB, SEXP UPLO)
+{
+  cl_env *env = get_env(ENV);
+  int allocated = 0;
   MATRIXCHECK(A, REALSXP);
   MATRIXCHECK(B, REALSXP);
+  SCALARCHECK(ALPHA, REALSXP);
+  SCALARCHECK(BETA, REALSXP);
+  clblasTranspose transAB = getTrans(TRANSAB);
   clblasUplo uplo = getUplo(UPLO);
-  int na = LENGTH(A), ar = nrows(A), ac = ncols(A);
-  int nb = LENGTH(B), br = nrows(B), bc = ncols(B);
-  if (ar != br || ac != bc)
-    error_return("invalid matrix length\n");
-  if (!IS_SCALAR(ALPHA, REALSXP) || !IS_SCALAR(BETA, REALSXP))
-    error_return("alpha and beta must be double type scalar\n");
-  double alpha = REAL(ALPHA)[0], beta = REAL(BETA)[0];
-  
-  if (C == R_NilValue)
+  double alpha = SCALARREAL(ALPHA), beta = SCALARREAL(BETA);
+  int ar = nrows(A), ac = ncols(A), br = nrows(B), bc = ncols(B), cr, cc;
+  if (isNull(C) || LENGTH(C) == 0)
   {
-    C = PROTECT(allocMatrix(REALSXP, ar, ac));
+    cr = transAB == clblasNoTrans ? ar : ac;
+    cc = transAB == clblasNoTrans ? br : bc;
+    C = PROTECT(allocMatrix(REALSXP, cr, cc));
     beta = 0;
+    allocated = 1;
   } else {
     MATRIXCHECK(C, REALSXP);
-    if (ar != nrows(C) || ac != ncols(C))
-      error_return("invalid matrix length\n");
+    cr = nrows(C), cc = ncols(C);
   }
-  
-  CHECK(clblasSetup());
-  cl_mem mem_a = create_buffer(env, sizeof(double) * na);
-  cl_mem mem_b = create_buffer(env, sizeof(double) * nb);
-  cl_mem mem_c = create_buffer(env, sizeof(double) * LENGTH(C));
-  write_buffer(env, mem_a, REAL(A), sizeof(double) * na);
-  write_buffer(env, mem_b, REAL(B), sizeof(double) * nb);
-  if (beta != 0)
-    write_buffer(env, mem_c, REAL(C), sizeof(double) * LENGTH(C));
-  CHECK(clFinish(env->queues[0]));
-  
-  cl_event event = NULL;
-  cl_int err = clblasDsyr2k(clblasColumnMajor, uplo, clblasNoTrans, 
-                           ncols(C), ac, alpha, mem_a, 0, ac, mem_b, 0, bc, beta, mem_c, 0, ncols(C),
-                           env->num_queues, env->queues, 0, NULL, &event);
-  CHECK(clWaitForEvents(1, &event));
 
-  read_buffer(env, mem_c, REAL(C), sizeof(double) * LENGTH(C));
-  CHECK(clFinish(env->queues[0]));
-  clblasTeardown();
+  int size_a = LENGTH(A) * sizeof(double);
+  int size_b = LENGTH(B) * sizeof(double);
+  int size_c = LENGTH(C) * sizeof(double);
+  double *ap = REAL(A), *bp = REAL(B), *cp = REAL(C);
+  cl_int err = Dsyr2k_internal(
+    env, ap, bp, cp, alpha, beta, transAB, uplo, ar, ac, br, bc, cr, cc, size_a, size_b, size_c);
+  CHECK(err);
+
+  UNPROTECT(allocated);
   return C;
 }
 
-SEXP Dsymm(SEXP env_exp, SEXP A, SEXP B, SEXP C, SEXP ALPHA, SEXP BETA, SEXP UPLO, SEXP SIDE)
+cl_int Dsyr2k_internal(
+  cl_env *env, double *a, double *b, double *c, double alpha, double beta,
+  clblasTranspose transAB, clblasUplo uplo, 
+  int ar, int ac, int br, int bc, int cr, int cc, int size_a, int size_b, int size_c)
 {
-  cl_env *env = get_env(env_exp);
+  CHECK(clblasSetup());
+  cl_event events[NEVENTS];
+  int nevent = 0;
+  cl_mem mem_a = create_mem(env, a, size_a, CL_MEM_READ_ONLY, &(events[nevent++]));
+  cl_mem mem_b = create_mem(env, b, size_b, CL_MEM_READ_ONLY, &(events[nevent++]));
+  cl_mem mem_c;
+  if (beta != 0) mem_c = create_mem(env, c, size_c, CL_MEM_READ_WRITE, &(events[nevent++]));
+  else mem_c = create_mem(env, NULL, size_c, CL_MEM_READ_WRITE, NULL);
+  
+  int k = transAB == clblasNoTrans ? ac : ar;
+  cl_int err = clblasDsyr2k(clblasColumnMajor, uplo, transAB,
+    cr, k, alpha, mem_a, 0, ar, mem_b, 0, br, beta, mem_c, 0, cr,
+    1, &(env->queues[0]), nevent, events, &(events[nevent]));
+  CHECK(err);
+  events[nevent+1] = *read_mem(env, mem_c, c, size_c, 1, &(events[nevent]));
+  CHECK(clWaitForEvents(1, &(events[nevent+1])));
+  CHECK(clReleaseMemObject(mem_a));
+  CHECK(clReleaseMemObject(mem_b));
+  CHECK(clReleaseMemObject(mem_c));
+  clblasTeardown();
+  return CL_SUCCESS;
+}
+
+SEXP Dsymm(SEXP ENV, SEXP A, SEXP B, SEXP C, SEXP ALPHA, SEXP BETA, SEXP SIDE, SEXP UPLO)
+{
+  cl_env *env = get_env(ENV);
+  int allocated = 0;
   MATRIXCHECK(A, REALSXP);
   MATRIXCHECK(B, REALSXP);
-  clblasUplo uplo = getUplo(UPLO);
+  SCALARCHECK(ALPHA, REALSXP);
+  SCALARCHECK(BETA, REALSXP);
   clblasSide side = getSide(SIDE);
-  int na = LENGTH(A), ar = nrows(A), ac = ncols(A);
-  int nb = LENGTH(B), br = nrows(B), bc = ncols(B);
-  int lda = side == clblasLeft ? ar : ac;
-  if ((side == clblasLeft && ac != br) || (side == clblasRight && bc != ar))
-    error_return("invalid matrix length\n");
-  if (!IS_SCALAR(ALPHA, REALSXP) || !IS_SCALAR(BETA, REALSXP))
-    error_return("alpha and beta must be double type scalar\n");
-  double alpha = REAL(ALPHA)[0], beta = REAL(BETA)[0];
-  
-  if (C == R_NilValue)
+  clblasUplo uplo = getUplo(UPLO);
+  double alpha = SCALARREAL(ALPHA), beta = SCALARREAL(BETA);
+  int ar = nrows(A), ac = ncols(A), br = nrows(B), bc = ncols(B), cr, cc;
+  if (isNull(C) || LENGTH(C) == 0)
   {
-    if (side == clblasLeft)
-      C = PROTECT(allocMatrix(REALSXP, ar, bc));
-    else
-      C = PROTECT(allocMatrix(REALSXP, br, ac));
+    cr = br, cc = bc;
+    C = PROTECT(allocMatrix(REALSXP, cr, cc));
     beta = 0;
+    allocated = 1;
   } else {
     MATRIXCHECK(C, REALSXP);
-    if ((side == clblasLeft && (nrows(C) != ar || ncols(C) != bc)) ||
-        (side == clblasRight && (nrows(C) != br || ncols(C) != ac)))
-      error_return("invalid matrix length\n");
+    cr = nrows(C), cc = ncols(C);
   }
-  
-  CHECK(clblasSetup());
-  cl_mem mem_a = create_buffer(env, sizeof(double) * na);
-  cl_mem mem_b = create_buffer(env, sizeof(double) * nb);
-  cl_mem mem_c = create_buffer(env, sizeof(double) * LENGTH(C));
-  write_buffer(env, mem_a, REAL(A), sizeof(double) * na);
-  write_buffer(env, mem_b, REAL(B), sizeof(double) * nb);
-  if (beta != 0)
-    write_buffer(env, mem_c, REAL(C), sizeof(double) * LENGTH(C));
-  CHECK(clFinish(env->queues[0]));
-  
-  cl_event event = NULL;
-  cl_int err = clblasDsymm(clblasColumnMajor, side, uplo,
-                           nrows(C), ncols(C), alpha, mem_a, 0, lda, mem_b, 0, br, beta, mem_c, 0, nrows(C),
-                           env->num_queues, env->queues, 0, NULL, &event);
-  CHECK(clWaitForEvents(1, &event));
 
-  read_buffer(env, mem_c, REAL(C), sizeof(double) * LENGTH(C));
-  CHECK(clFinish(env->queues[0]));
-  clblasTeardown();
+  int size_a = LENGTH(A) * sizeof(double);
+  int size_b = LENGTH(B) * sizeof(double);
+  int size_c = LENGTH(C) * sizeof(double);
+  double *ap = REAL(A), *bp = REAL(B), *cp = REAL(C);
+  cl_int err = Dsymm_internal(
+    env, ap, bp, cp, alpha, beta, side, uplo, ar, ac, br, bc, cr, cc, size_a, size_b, size_c);
+  CHECK(err);
+
+  UNPROTECT(allocated);
   return C;
 }
+
+cl_int Dsymm_internal(
+  cl_env *env, double *a, double *b, double *c, double alpha, double beta,
+  clblasSide side, clblasUplo uplo,
+  int ar, int ac, int br, int bc, int cr, int cc, int size_a, int size_b, int size_c)
+{
+  CHECK(clblasSetup());
+  cl_event events[NEVENTS];
+  int nevent = 0;
+  cl_mem mem_a = create_mem(env, a, size_a, CL_MEM_READ_ONLY, &(events[nevent++]));
+  cl_mem mem_b = create_mem(env, b, size_b, CL_MEM_READ_ONLY, &(events[nevent++]));
+  cl_mem mem_c;
+  if (beta != 0) mem_c = create_mem(env, c, size_c, CL_MEM_READ_WRITE, &(events[nevent++]));
+  else mem_c = create_mem(env, NULL, size_c, CL_MEM_READ_WRITE, NULL);
+  
+  cl_int err = clblasDsymm(clblasColumnMajor, side, uplo, 
+    cr, cc, alpha, mem_a, 0, ar, mem_b, 0, br, beta, mem_c, 0, cr,
+    1, &(env->queues[0]), nevent, events, &(events[nevent]));
+  CHECK(err);
+  events[nevent+1] = *read_mem(env, mem_c, c, size_c, 1, &(events[nevent]));
+  CHECK(clWaitForEvents(1, &(events[nevent+1])));
+  CHECK(clReleaseMemObject(mem_a));
+  CHECK(clReleaseMemObject(mem_b));
+  CHECK(clReleaseMemObject(mem_c));
+  clblasTeardown();
+  return CL_SUCCESS;
+}
+
 
 
 
